@@ -1,4 +1,12 @@
 /********************************************************************************************
+ *                                   RACE VARS
+ *******************************************************************************************/
+const int numContestants = 3;
+String knownAddresses[numContestants] = {};
+int foundAddresses[numContestants]    = {};
+unsigned int checkpointNumber;
+
+/********************************************************************************************
  *                                    TIMMERS
  *******************************************************************************************/ 
 hw_timer_t * timer = NULL; //create hardware timer
@@ -16,9 +24,21 @@ Scheduler userScheduler; // to control your personal task
 /********************************************************************************************
  *                                    LEDS
  *******************************************************************************************/ 
-int bleLed = 19;
-int wifiLed = 12;
+#include <SPI.h>
+
+#include "LedMatrix.h"
+#define NUMBER_OF_DEVICES 1 //number of led matrix connect in series
+#define CS_PIN 12
+#define CLK_PIN 14
+#define MISO_PIN 1 //we do not use this pin just fill to match constructor
+#define MOSI_PIN 13
+LedMatrix ledMatrix = LedMatrix(NUMBER_OF_DEVICES, CLK_PIN, MISO_PIN, MOSI_PIN, CS_PIN);
+
+int bleLed = 23;
+int wifiLed = 19;
 bool wifiLedState;
+
+ void scrollText(String text, int textLength);
 
 /********************************************************************************************
  *                                    WIFI
@@ -27,12 +47,8 @@ bool wifiLedState;
 #include <WiFiClient.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
-const char* ssid     = "..............";
-const char* password = "..............";
-WebServer server(80);
-void handleRoot();
-void handleContestants();
-void handleNotFound();
+const char* ssid     = "houseMesh";
+const char* password = "Enestano@.n0p";
 
 /********************************************************************************************
  *                                    COAP
@@ -54,9 +70,6 @@ void callback_led(CoapPacket &packet, IPAddress ip, int port);
 
 int scanTime = 5;
 BLEScan* pBLEScan;
-String knownAddresses[] = { "00:00:00:00:00:00" , "##:##:##:##:##:##"};
-const int numContestants = sizeof(knownAddresses) / sizeof(*knownAddresses);
-int foundAddresses[numContestants] = {0,0};
 const int CUTOFF = -50;
 
 class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks
@@ -75,6 +88,7 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks
       int rssi = advertisedDevice.getRSSI();
       if (rssi > CUTOFF)
       {
+        Serial.printf("Runner: ");
         Serial.println(address);
         foundAddresses[i] = 1;
         digitalWrite(bleLed, HIGH);
@@ -105,7 +119,6 @@ void nodeTimeAdjustedCallback(int32_t offset);
 void delayReceivedCallback(uint32_t from, int32_t delay);
 */
 
-
 /********************************************************************************************
  *                                    SETUP
  *******************************************************************************************/ 
@@ -116,16 +129,18 @@ void setup()
   pinMode(wifiLed, OUTPUT);
   digitalWrite(bleLed, LOW);
   digitalWrite(wifiLed, LOW);
+  
+  ledMatrix.init();
+  //ledMatrix.setIntensity(4); // range is 0-15
+  ledMatrix.clear();
+  ledMatrix.commit();
+  
 
   //inicializate WEbServer
   WiFi.mode(WIFI_STA);
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {delay(500);}
-  //create handlres
-  server.on("/", handleRoot);
-  server.on("/contestants", handleContestants);
-  server.onNotFound(handleNotFound);
-  server.begin();
+  
   //Inicializate BLE scaner
   BLEDevice::init("");
   pBLEScan = BLEDevice::getScan(); //create new scan
@@ -136,8 +151,11 @@ void setup()
 
   //Inicializate CoAP callbacks
   coap.server(callback_led, "led");
+  coap.server(callback_registerRunner, "reg_runner");
+  coap.server(callback_setCheckpointPosition, "set_checkpoint");
   coap.response(callback_response);
   coap.start();
+  scrollText("GO"); //22
 }
 
 
@@ -154,30 +172,7 @@ void loop()
   //Serial.println("Scan done!");
   pBLEScan->clearResults();   // delete results fromBLEScan buffer to release memory
   //delay(2000);
-  server.handleClient();
   coap.loop();
-}
-
-/********************************************************************************************
- *                                    WEB SERVER
- *******************************************************************************************/ 
-void handleRoot() {
-}
-
-void handleContestants()
-{
-  String message = "";
-  for(int i = 1; i < numContestants; i++)
-  {
-    message += knownAddresses[i];
-    message += "\n";
-  }
-  server.send(200, "text/plain", message);
-}
-
-void handleNotFound()
-{
-  server.send(404, "text/plain", "404");
 }
 
 /********************************************************************************************
@@ -205,6 +200,37 @@ void callback_led(CoapPacket &packet, IPAddress ip, int port) {
   }
 }
 
+void callback_registerRunner(CoapPacket &packet, IPAddress ip, int port)
+{ 
+  char p[packet.payloadlen + 1];
+  memcpy(p, packet.payload, packet.payloadlen);
+  p[packet.payloadlen] = NULL;
+
+  String message(p);
+  Serial.println("mensajeEntrate");
+  Serial.println(p);
+  int i = 0;
+  for(i; i < numContestants; i++)
+  {
+    if(knownAddresses[i] == 0)
+    {
+      knownAddresses[i] = String(p);
+      foundAddresses[i] = 0;
+      break;
+    }
+  }
+  scrollText(String(++i));//12
+}
+void callback_setCheckpointPosition(CoapPacket &packet, IPAddress ip, int port)
+{ 
+  char p[packet.payloadlen + 1];
+  memcpy(p, packet.payload, packet.payloadlen);
+  p[packet.payloadlen] = NULL;
+
+  String message(p);
+  Serial.println(p);
+}
+
 
 void callback_response(CoapPacket &packet, IPAddress ip, int port)
 {
@@ -223,7 +249,8 @@ void callback_response(CoapPacket &packet, IPAddress ip, int port)
 void onTimer(){
     endTimer();
     digitalWrite(bleLed, LOW);
-    foundAddresses[1] = 0;
+    foundAddresses[0] = 0;
+    //ledMatrix.clear();
 }
 
 void startTimer()
@@ -238,3 +265,24 @@ void endTimer() {
   timerEnd(timer);
   timer = NULL; 
 }
+
+/********************************************************************************************
+ *                                    LED MATRIX  FUNCTIONS
+ *******************************************************************************************/
+
+ void scrollText(String text)
+ {
+   unsigned int textLength = text.length()*11;
+   
+   ledMatrix.setText(text);
+   for(int j = 0; j < textLength; j++)
+   {
+    ledMatrix.clear();
+    ledMatrix.scrollTextLeft();
+    ledMatrix.drawText();
+    ledMatrix.commit();
+    delay(100); //este scroll de delay habra que hacero en un timmer o una tarea asincrona.
+   } 
+   ledMatrix.clear();
+   ledMatrix.commit();
+ }
