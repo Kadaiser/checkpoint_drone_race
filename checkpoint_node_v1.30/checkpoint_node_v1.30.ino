@@ -1,19 +1,30 @@
 /********************************************************************************************
  *                                   RACE VARS
  *******************************************************************************************/
-const int numContestants = 3;
+const int numContestants = 4;
 String knownAddresses[numContestants] = {};
 int foundAddresses[numContestants]    = {};
 unsigned int checkpointNumber;
 
 /********************************************************************************************
  *                                    TIMMERS
- *******************************************************************************************/ 
-hw_timer_t * timer = NULL; //create hardware timer
-hw_timer_t * timer2 = NULL; //create hardware timer 
-void onTimer();
-void startTimer();
-void endTimer();
+ *******************************************************************************************/
+int totalInterruptCounter;
+hw_timer_t * timerContestant1 = NULL;
+hw_timer_t * timerContestant2 = NULL;
+hw_timer_t * timerContestant3 = NULL;
+hw_timer_t * timerContestant4 = NULL;
+portMUX_TYPE timerMux1 = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE timerMux2 = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE timerMux3 = portMUX_INITIALIZER_UNLOCKED;
+portMUX_TYPE timerMux4 = portMUX_INITIALIZER_UNLOCKED;
+
+hw_timer_t * timerScreen = NULL; //create hardware timer
+void startTimer(int hw_timmer_numer, hw_timer_t * timer, void (*)()); //2º argument as function
+void endTimer1();
+void endTimer2();
+void endTimer3();
+void endTimer4();
 
 /********************************************************************************************
  *                                    SCHEDULER
@@ -22,10 +33,9 @@ void endTimer();
 Scheduler userScheduler; // to control your personal task
 
 /********************************************************************************************
- *                                    LEDS
+ *                                    MATRIZ LEDS
  *******************************************************************************************/ 
 #include <SPI.h>
-
 #include "LedMatrix.h"
 #define NUMBER_OF_DEVICES 1 //number of led matrix connect in series
 #define CS_PIN 12
@@ -34,11 +44,7 @@ Scheduler userScheduler; // to control your personal task
 #define MOSI_PIN 13
 LedMatrix ledMatrix = LedMatrix(NUMBER_OF_DEVICES, CLK_PIN, MISO_PIN, MOSI_PIN, CS_PIN);
 
-int bleLed = 23;
-int wifiLed = 19;
-bool wifiLedState;
-
- void scrollText(String text, int textLength);
+void scrollText(String text);
 
 /********************************************************************************************
  *                                    WIFI
@@ -59,6 +65,9 @@ WiFiUDP udp;
 Coap coap(udp);
 void callback_response(CoapPacket &packet, IPAddress ip, int port);
 void callback_led(CoapPacket &packet, IPAddress ip, int port);
+
+//byte mac[] = { 0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
+//IPAddress ip(XXX,XXX,XXX,XXX);
 
 /********************************************************************************************
  *                                    BLE
@@ -81,7 +90,7 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks
     int i = 0;
     for(i; i < numContestants; i++)
     {
-     //calulate minimal time elapsed have endend for this addrress
+     //calulate register runner and minimal time elapsed have endend for this addrress
      if (strcmp(address.c_str(), knownAddresses[i].c_str()) == 0 && foundAddresses[i] ==0)
      {
       //calculate valid distance
@@ -91,8 +100,23 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks
         Serial.printf("Runner: ");
         Serial.println(address);
         foundAddresses[i] = 1;
-        digitalWrite(bleLed, HIGH);
-        startTimer();
+        switch (i) {
+          case 0:
+            startTimer(0,timerContestant1, endTimer1);
+            break;
+          case 1:
+            startTimer(1,timerContestant2, endTimer2);
+            break;
+          case 2:
+            startTimer(2,timerContestant3, endTimer3);
+            break;
+          case 3:
+            startTimer(3,timerContestant4, endTimer4);
+            break;
+          default:
+            break;
+        }
+        scrollText(String(++i));
       }
      }
     }
@@ -125,10 +149,6 @@ void delayReceivedCallback(uint32_t from, int32_t delay);
 void setup()
 {
   Serial.begin(115200);
-  pinMode(bleLed, OUTPUT);
-  pinMode(wifiLed, OUTPUT);
-  digitalWrite(bleLed, LOW);
-  digitalWrite(wifiLed, LOW);
   
   ledMatrix.init();
   //ledMatrix.setIntensity(4); // range is 0-15
@@ -178,6 +198,14 @@ void loop()
 /********************************************************************************************
  *                                    COAP FUNCTIONS
  *******************************************************************************************/ 
+int sendPutToAddress(String ipAddress, int port,String resource, String msg)
+{
+  //return coap.put(IPAddress(10, 0, 0, 1), 5683, resource, msg);
+  //return coap.get(IPAddress(10, 0, 0, 1), 5683, ,msg);
+  //return coap.put(IPAddress(10, 0, 0, 1), port, resource, msg);
+}
+
+ 
 void callback_led(CoapPacket &packet, IPAddress ip, int port) {  
 
   char p[packet.payloadlen + 1];
@@ -185,17 +213,12 @@ void callback_led(CoapPacket &packet, IPAddress ip, int port) {
   p[packet.payloadlen] = NULL;
   
   String message(p);
-
-  if (message.equals("0"))
-    wifiLedState = false;
-  else if(message.equals("1"))
-    wifiLedState = true;
       
-  if (wifiLedState) {
-    digitalWrite(wifiLed, HIGH) ; 
+  if (message.equals("0")) {
+    scrollText("V");
     coap.sendResponse(ip, port, packet.messageid, "1");
-  } else { 
-    digitalWrite(wifiLed, LOW) ; 
+  } else if(message.equals("1")) { 
+    scrollText("X");
     coap.sendResponse(ip, port, packet.messageid, "0");
   }
 }
@@ -207,19 +230,22 @@ void callback_registerRunner(CoapPacket &packet, IPAddress ip, int port)
   p[packet.payloadlen] = NULL;
 
   String message(p);
-  Serial.println("mensajeEntrate");
+  Serial.printf("Register runner:");
   Serial.println(p);
   int i = 0;
+  String resp= "ERROR";
   for(i; i < numContestants; i++)
   {
     if(knownAddresses[i] == 0)
     {
       knownAddresses[i] = String(p);
       foundAddresses[i] = 0;
+      resp = String(++i);
       break;
     }
   }
-  scrollText(String(++i));//12
+  coap.sendResponse(ip, port, packet.messageid, "0");
+  scrollText(resp);//12
 }
 void callback_setCheckpointPosition(CoapPacket &packet, IPAddress ip, int port)
 { 
@@ -227,8 +253,14 @@ void callback_setCheckpointPosition(CoapPacket &packet, IPAddress ip, int port)
   memcpy(p, packet.payload, packet.payloadlen);
   p[packet.payloadlen] = NULL;
 
-  String message(p);
-  Serial.println(p);
+  //int message(p);
+  int newCheckPointValue = int(p);
+  Serial.println(newCheckPointValue);
+  if(newCheckPointValue > 0)
+  {
+    checkpointNumber = newCheckPointValue;
+    scrollText(p);
+  }
 }
 
 
@@ -246,24 +278,40 @@ void callback_response(CoapPacket &packet, IPAddress ip, int port)
 /********************************************************************************************
  *                                    TIMMER FUNCTIONS
  *******************************************************************************************/ 
-void onTimer(){
-    endTimer();
-    digitalWrite(bleLed, LOW);
-    foundAddresses[0] = 0;
-    //ledMatrix.clear();
-}
 
-void startTimer()
+void startTimer(int hw_timmer_numer,hw_timer_t * timer, void endTimer())
 {
-  timer = timerBegin(0, 80, true); // timer_id = 0; divider=80; countUp = true;
-  timerAttachInterrupt(timer, &onTimer, true); // edge = true
+  Serial.println("Iniciando temporizador");
+  timer = timerBegin(hw_timmer_numer, 80, true); // timer_id = 0; divider=80; countUp = true;
+  timerAttachInterrupt(timer, endTimer, true); // edge = true
   timerAlarmWrite(timer, 3000000, false);  //1000 ms
   timerAlarmEnable(timer);
 }
 
-void endTimer() {
-  timerEnd(timer);
-  timer = NULL; 
+void IRAM_ATTR endTimer1() {
+      portENTER_CRITICAL_ISR(&timerMux1);
+      Serial.println("Finalizando temporizador");
+      foundAddresses[0] = 0;
+      portEXIT_CRITICAL_ISR(&timerMux1);
+}
+void IRAM_ATTR endTimer2() {
+    portENTER_CRITICAL_ISR(&timerMux2);
+    foundAddresses[1] = 0;
+    timerContestant2 = NULL;
+    portEXIT_CRITICAL_ISR(&timerMux2);
+}
+void IRAM_ATTR endTimer3() {
+    portENTER_CRITICAL_ISR(&timerMux3);
+    foundAddresses[2] = 0;
+
+    timerContestant3 = NULL;
+    portEXIT_CRITICAL_ISR(&timerMux3);
+}
+void IRAM_ATTR endTimer4() {
+    portENTER_CRITICAL_ISR(&timerMux4);
+    foundAddresses[3] = 0;
+    timerContestant4 = NULL;
+    portEXIT_CRITICAL_ISR(&timerMux4);
 }
 
 /********************************************************************************************
@@ -281,7 +329,7 @@ void endTimer() {
     ledMatrix.scrollTextLeft();
     ledMatrix.drawText();
     ledMatrix.commit();
-    delay(100); //este scroll de delay habra que hacero en un timmer o una tarea asincrona.
+    delay(50); //este scroll de delay habra que hacero en un timmer o una tarea asincrona.
    } 
    ledMatrix.clear();
    ledMatrix.commit();
