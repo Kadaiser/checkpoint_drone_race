@@ -5,6 +5,8 @@ const int numContestants = 4;
 String knownAddresses[numContestants] = {};
 int foundAddresses[numContestants]    = {};
 unsigned int checkpointNumber;
+bool checkpointAssigned;
+IPAddress deviceIP;
 
 /********************************************************************************************
  *                                    TIMMERS
@@ -53,8 +55,8 @@ void scrollText(String text);
 #include <WiFiClient.h>
 #include <WebServer.h>
 #include <ESPmDNS.h>
-const char* ssid     = "houseMesh";
-const char* password = "Enestano@.n0p";
+const char* ssid     = "dronrace";
+const char* password = "4thewin!";
 
 /********************************************************************************************
  *                                    COAP
@@ -65,6 +67,7 @@ WiFiUDP udp;
 Coap coap(udp);
 void callback_response(CoapPacket &packet, IPAddress ip, int port);
 void callback_led(CoapPacket &packet, IPAddress ip, int port);
+void callback_setCheckpointPosition(CoapPacket &packet, IPAddress ip, int port);
 
 //byte mac[] = { 0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
 //IPAddress ip(XXX,XXX,XXX,XXX);
@@ -157,9 +160,13 @@ void setup()
   
 
   //inicializate WEbServer
+  WiFi.persistent(false);
   WiFi.mode(WIFI_STA);
+  WiFi.enableSTA(true);
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {delay(500);}
+  deviceIP = WiFi.localIP();
+  Serial.println(WiFi.localIP());
   
   //Inicializate BLE scaner
   BLEDevice::init("");
@@ -175,12 +182,13 @@ void setup()
   coap.server(callback_setCheckpointPosition, "set_checkpoint");
   coap.response(callback_response);
   coap.start();
-  scrollText("GO"); //22
+  checkpointAssigned = false;
+  scrollText("SET"); //22
 }
 
 
 /********************************************************************************************
- *                                    LOOP
+ *                                         LOOP
  *******************************************************************************************/ 
 
 void loop()
@@ -193,6 +201,7 @@ void loop()
   pBLEScan->clearResults();   // delete results fromBLEScan buffer to release memory
   //delay(2000);
   coap.loop();
+  if(!checkpointAssigned)scrollText(String(deviceIP[3]));
 }
 
 /********************************************************************************************
@@ -253,14 +262,16 @@ void callback_setCheckpointPosition(CoapPacket &packet, IPAddress ip, int port)
   memcpy(p, packet.payload, packet.payloadlen);
   p[packet.payloadlen] = NULL;
 
-  //int message(p);
-  int newCheckPointValue = int(p);
+  String message(p);
+  int newCheckPointValue = int(p[0]);
   Serial.println(newCheckPointValue);
   if(newCheckPointValue > 0)
   {
     checkpointNumber = newCheckPointValue;
-    scrollText(p);
+    checkpointAssigned = true;
+    scrollText("READY");
   }
+  coap.sendResponse(ip, port, packet.messageid, "0");
 }
 
 
@@ -320,7 +331,9 @@ void IRAM_ATTR endTimer4() {
 
  void scrollText(String text)
  {
-   unsigned int textLength = text.length()*11;
+   unsigned int multiplier = 11;
+  
+   unsigned int textLength = text.length()*multiplier;
    
    ledMatrix.setText(text);
    for(int j = 0; j < textLength; j++)
