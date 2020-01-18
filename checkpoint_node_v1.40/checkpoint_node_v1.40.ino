@@ -57,6 +57,7 @@ void scrollText(String text);
 #include <ESPmDNS.h>
 const char* ssid     = "dronrace";
 const char* password = "4thewin!";
+void reconect();
 
 /********************************************************************************************
  *                                    COAP
@@ -68,6 +69,7 @@ Coap coap(udp);
 void callback_response(CoapPacket &packet, IPAddress ip, int port);
 void callback_led(CoapPacket &packet, IPAddress ip, int port);
 void callback_setCheckpointPosition(CoapPacket &packet, IPAddress ip, int port);
+int putMessage(String message, String content);
 
 //byte mac[] = { 0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
 //IPAddress ip(XXX,XXX,XXX,XXX);
@@ -119,7 +121,8 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks
           default:
             break;
         }
-        scrollText(String(++i));
+        putMessage("detectedRunner",String(++i));
+        scrollText(String(i));
       }
      }
     }
@@ -131,6 +134,7 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks
 /********************************************************************************************
  *                                    MESH
  *******************************************************************************************/ 
+
 /*
 #include <painlessMesh.h>
 #define   MESH_SSID       "..........."
@@ -157,6 +161,7 @@ void setup()
   //ledMatrix.setIntensity(4); // range is 0-15
   ledMatrix.clear();
   ledMatrix.commit();
+  scrollText("HI"); //22
   
 
   //inicializate WEbServer
@@ -183,7 +188,7 @@ void setup()
   coap.response(callback_response);
   coap.start();
   checkpointAssigned = false;
-  scrollText("SET"); //22
+  scrollText("SET");
 }
 
 
@@ -193,15 +198,19 @@ void setup()
 
 void loop()
 {
-  // put your main code here, to run repeatedly:
-  BLEScanResults foundDevices = pBLEScan->start(scanTime, false);
-  //Serial.print("Devices found: ");
-  //Serial.println(foundDevices.getCount());
-  //Serial.println("Scan done!");
-  pBLEScan->clearResults();   // delete results fromBLEScan buffer to release memory
-  //delay(2000);
-  coap.loop();
-  if(!checkpointAssigned)scrollText(String(deviceIP[3]));
+  if ( WiFi.status() ==  WL_CONNECTED ) 
+  {
+    BLEScanResults foundDevices = pBLEScan->start(scanTime, false);
+    //Serial.print("Devices found: ");
+    //Serial.println(foundDevices.getCount());
+    //Serial.println("Scan done!");
+    pBLEScan->clearResults();   // delete results fromBLEScan buffer to release memory
+    //delay(2000);
+    coap.loop();
+    if(!checkpointAssigned)scrollText(String(deviceIP[3]));
+  }
+  else reconect();
+  
 }
 
 /********************************************************************************************
@@ -263,7 +272,8 @@ void callback_setCheckpointPosition(CoapPacket &packet, IPAddress ip, int port)
   p[packet.payloadlen] = NULL;
 
   String message(p);
-  int newCheckPointValue = int(p[0]);
+  Serial.println(p);
+  int newCheckPointValue = p[0];
   Serial.println(newCheckPointValue);
   if(newCheckPointValue > 0)
   {
@@ -285,6 +295,16 @@ void callback_response(CoapPacket &packet, IPAddress ip, int port)
   Serial.println(p);
 }
 
+int putMessage(String message, String content)
+{
+  char url[message.length()];
+  char payload[content.length()];
+  message.toCharArray(url, message.length());
+  content.toCharArray(payload, content.length());
+  int msgid = coap.put(IPAddress(192, 168, 4, 1), 5683, url, payload);
+  return msgid;
+}
+
 
 /********************************************************************************************
  *                                    TIMMER FUNCTIONS
@@ -295,7 +315,7 @@ void startTimer(int hw_timmer_numer,hw_timer_t * timer, void endTimer())
   Serial.println("Iniciando temporizador");
   timer = timerBegin(hw_timmer_numer, 80, true); // timer_id = 0; divider=80; countUp = true;
   timerAttachInterrupt(timer, endTimer, true); // edge = true
-  timerAlarmWrite(timer, 3000000, false);  //1000 ms
+  timerAlarmWrite(timer, 5000000, false);  //1000 ms
   timerAlarmEnable(timer);
 }
 
@@ -331,7 +351,11 @@ void IRAM_ATTR endTimer4() {
 
  void scrollText(String text)
  {
-   unsigned int multiplier = 11;
+   unsigned int multiplier = 8;
+   if(text.length() == 1) multiplier = 13;
+   if(text.length() == 2) multiplier = 10;
+   if(text.length() == 3) multiplier = 9;
+   
   
    unsigned int textLength = text.length()*multiplier;
    
@@ -347,3 +371,17 @@ void IRAM_ATTR endTimer4() {
    ledMatrix.clear();
    ledMatrix.commit();
  }
+ 
+/********************************************************************************************
+ *                                    WIFI Overwatch
+ *******************************************************************************************/
+ void reconect()
+ {
+  WiFi.begin(ssid, password);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.println(".");
+   }
+  deviceIP = WiFi.localIP();
+ }
+ 
