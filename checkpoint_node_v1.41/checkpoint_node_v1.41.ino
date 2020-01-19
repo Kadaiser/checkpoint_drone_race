@@ -67,7 +67,6 @@ void reconect();
 WiFiUDP udp;
 Coap coap(udp);
 void callback_response(CoapPacket &packet, IPAddress ip, int port);
-void callback_led(CoapPacket &packet, IPAddress ip, int port);
 void callback_setCheckpointPosition(CoapPacket &packet, IPAddress ip, int port);
 int putMessage(String message, String content);
 
@@ -135,6 +134,7 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks
  *                                    MESH
  *******************************************************************************************/ 
 
+
 /*
 #include <painlessMesh.h>
 #define   MESH_SSID       "..........."
@@ -166,7 +166,7 @@ void setup()
 
   //inicializate WEbServer
   WiFi.persistent(false);
-  WiFi.mode(WIFI_STA);
+  WiFi.mode(WIFI_AP_STA);
   WiFi.enableSTA(true);
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {delay(500);}
@@ -182,7 +182,6 @@ void setup()
   pBLEScan->setWindow(99);  // less or equal setInterval value
 
   //Inicializate CoAP callbacks
-  coap.server(callback_led, "led");
   coap.server(callback_registerRunner, "reg_runner");
   coap.server(callback_setCheckpointPosition, "set_checkpoint");
   coap.response(callback_response);
@@ -198,7 +197,7 @@ void setup()
 
 void loop()
 {
-  if ( WiFi.status() ==  WL_CONNECTED ) 
+  if ( WiFi.isConnected() ) 
   {
     BLEScanResults foundDevices = pBLEScan->start(scanTime, false);
     //Serial.print("Devices found: ");
@@ -216,55 +215,43 @@ void loop()
 /********************************************************************************************
  *                                    COAP FUNCTIONS
  *******************************************************************************************/ 
-int sendPutToAddress(String ipAddress, int port,String resource, String msg)
-{
-  //return coap.put(IPAddress(10, 0, 0, 1), 5683, resource, msg);
-  //return coap.get(IPAddress(10, 0, 0, 1), 5683, ,msg);
-  //return coap.put(IPAddress(10, 0, 0, 1), port, resource, msg);
-}
-
- 
-void callback_led(CoapPacket &packet, IPAddress ip, int port) {  
-
-  char p[packet.payloadlen + 1];
-  memcpy(p, packet.payload, packet.payloadlen);
-  p[packet.payloadlen] = NULL;
-  
-  String message(p);
-      
-  if (message.equals("0")) {
-    scrollText("V");
-    coap.sendResponse(ip, port, packet.messageid, "1");
-  } else if(message.equals("1")) { 
-    scrollText("X");
-    coap.sendResponse(ip, port, packet.messageid, "0");
-  }
-}
 
 void callback_registerRunner(CoapPacket &packet, IPAddress ip, int port)
-{ 
+{
+  bool avaliable = true;
   char p[packet.payloadlen + 1];
   memcpy(p, packet.payload, packet.payloadlen);
   p[packet.payloadlen] = NULL;
 
   String message(p);
-  Serial.printf("Register runner:");
-  Serial.println(p);
-  int i = 0;
+  int i;
+
   String resp= "ERROR";
-  for(i; i < numContestants; i++)
+  //runner alrready register in this checkpoint
+  for(i = 0; i < numContestants; i++)
   {
-    if(knownAddresses[i] == 0)
-    {
-      knownAddresses[i] = String(p);
-      foundAddresses[i] = 0;
-      resp = String(++i);
-      break;
-    }
+    if (strcmp(String(p).c_str(), knownAddresses[i].c_str()) == 0) avaliable = false;
   }
-  coap.sendResponse(ip, port, packet.messageid, "0");
+    
+  
+  if(avaliable)//search empty space to include
+    for(i = 0; i < numContestants; i++)
+    { 
+      if(knownAddresses[i] == 0)
+      {
+        
+        knownAddresses[i] = String(p);
+        foundAddresses[i] = 0;
+        resp = String(++i);
+        Serial.printf("Register runner:");
+        Serial.println(p);
+        break;
+      }
+    }
+  //coap.sendResponse(ip, port, packet.messageid, "0");
   scrollText(resp);//12
 }
+
 void callback_setCheckpointPosition(CoapPacket &packet, IPAddress ip, int port)
 { 
   char p[packet.payloadlen + 1];
@@ -272,8 +259,7 @@ void callback_setCheckpointPosition(CoapPacket &packet, IPAddress ip, int port)
   p[packet.payloadlen] = NULL;
 
   String message(p);
-  Serial.println(p);
-  int newCheckPointValue = p[0];
+  int newCheckPointValue = atol(&p[0]);
   Serial.println(newCheckPointValue);
   if(newCheckPointValue > 0)
   {
@@ -281,14 +267,13 @@ void callback_setCheckpointPosition(CoapPacket &packet, IPAddress ip, int port)
     checkpointAssigned = true;
     scrollText("READY");
   }
-  coap.sendResponse(ip, port, packet.messageid, "0");
+  //coap.sendResponse(ip, port, packet.messageid, "0");
 }
 
 
 void callback_response(CoapPacket &packet, IPAddress ip, int port)
 {
   Serial.println("[Coap Response got]");
-  
   char p[packet.payloadlen + 1];
   memcpy(p, packet.payload, packet.payloadlen);
   p[packet.payloadlen] = NULL;
@@ -366,7 +351,7 @@ void IRAM_ATTR endTimer4() {
     ledMatrix.scrollTextLeft();
     ledMatrix.drawText();
     ledMatrix.commit();
-    delay(50); //este scroll de delay habra que hacero en un timmer o una tarea asincrona.
+    delay(30); //try to found a way without delay
    } 
    ledMatrix.clear();
    ledMatrix.commit();
@@ -377,10 +362,12 @@ void IRAM_ATTR endTimer4() {
  *******************************************************************************************/
  void reconect()
  {
+WiFi.persistent(false);
+  WiFi.mode(WIFI_AP_STA);
+  WiFi.enableSTA(true);
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.println(".");
+    scrollText("......");
    }
   deviceIP = WiFi.localIP();
  }
