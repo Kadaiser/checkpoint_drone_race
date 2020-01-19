@@ -7,6 +7,7 @@ int foundAddresses[numContestants]    = {};
 unsigned int checkpointNumber;
 bool checkpointAssigned;
 IPAddress deviceIP;
+const char deviceName[] = "esp32_0A";
 
 /********************************************************************************************
  *                                    TIMMERS
@@ -52,26 +53,22 @@ void scrollText(String text);
  *                                    WIFI
  *******************************************************************************************/ 
 #include <WiFi.h>
-#include <WiFiClient.h>
-#include <WebServer.h>
-#include <ESPmDNS.h>
+WiFiClient wifiClient;
 const char* ssid     = "dronrace";
 const char* password = "4thewin!";
-void reconect();
+void reconnect();
 
 /********************************************************************************************
- *                                    COAP
- *******************************************************************************************/ 
-#include <WiFiUdp.h>
-#include <coap-simple.h>
-WiFiUDP udp;
-Coap coap(udp);
-void callback_response(CoapPacket &packet, IPAddress ip, int port);
-void callback_setCheckpointPosition(CoapPacket &packet, IPAddress ip, int port);
-int putMessage(String message, String content);
+ *                                    MQTT
+ *******************************************************************************************/
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+const char* mqtt_server = "192.168.4.1";//dronerace.mqtt.com
+#define mqtt_port 1883
 
-//byte mac[] = { 0x00, 0xAA, 0xBB, 0xCC, 0xDE, 0x02 };
-//IPAddress ip(XXX,XXX,XXX,XXX);
+PubSubClient client(wifiClient);
+void callback(char* topic, byte* payload, unsigned int length);
+
 
 /********************************************************************************************
  *                                    BLE
@@ -120,7 +117,12 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks
           default:
             break;
         }
-        putMessage("detectedRunner",String(++i));
+        StaticJsonDocument<256> doc;
+        doc["checkpoint"] = deviceName;
+        doc["runner"] = knownAddresses[i];
+        char buffer[512];
+        size_t n = serializeJson(doc, buffer);
+        client.publish("dronrace/detectedRunner", buffer, n);
         scrollText(String(i));
       }
      }
@@ -162,12 +164,10 @@ void setup()
   ledMatrix.clear();
   ledMatrix.commit();
   scrollText("HI"); //22
-  
 
-  //inicializate WEbServer
-  WiFi.persistent(false);
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.enableSTA(true);
+  //WiFi.persistent(false);
+  WiFi.mode(WIFI_STA);
+  //WiFi.enableSTA(true);
   WiFi.begin(ssid, password);
   while (WiFi.status() != WL_CONNECTED) {delay(500);}
   deviceIP = WiFi.localIP();
@@ -181,11 +181,23 @@ void setup()
   pBLEScan->setInterval(100);
   pBLEScan->setWindow(99);  // less or equal setInterval value
 
-  //Inicializate CoAP callbacks
-  coap.server(callback_registerRunner, "reg_runner");
-  coap.server(callback_setCheckpointPosition, "set_checkpoint");
-  coap.response(callback_response);
-  coap.start();
+  //Inicializate MQTT callbacks
+  //client.setClient(wifiClient);
+  client.setServer(mqtt_server, mqtt_port);
+    while (!client.connected())
+    {
+    Serial.println("Connecting to MQTT...");
+    if (client.connect(deviceName)) {
+      Serial.println("connected");
+    } else {
+      Serial.print("failed with state ");
+      Serial.print(client.state());
+      delay(2000);
+    }
+  }
+  client.setCallback(callback);
+  client.subscribe("dronrace/setCheckpoint");
+  client.subscribe("dronrace/regRunner");
   checkpointAssigned = false;
   scrollText("SET");
 }
@@ -200,96 +212,61 @@ void loop()
   if ( WiFi.isConnected() ) 
   {
     BLEScanResults foundDevices = pBLEScan->start(scanTime, false);
-    //Serial.print("Devices found: ");
-    //Serial.println(foundDevices.getCount());
-    //Serial.println("Scan done!");
     pBLEScan->clearResults();   // delete results fromBLEScan buffer to release memory
-    //delay(2000);
-    coap.loop();
+
+    client.loop();
     if(!checkpointAssigned)scrollText(String(deviceIP[3]));
   }
-  else reconect();
+  else reconnect();
   
 }
 
 /********************************************************************************************
- *                                    COAP FUNCTIONS
+ *                                    MQTT FUNCTIONS
  *******************************************************************************************/ 
 
-void callback_registerRunner(CoapPacket &packet, IPAddress ip, int port)
+void callback(char* topic, byte* payload, unsigned int length)
 {
-  bool avaliable = true;
-  char p[packet.payloadlen + 1];
-  memcpy(p, packet.payload, packet.payloadlen);
-  p[packet.payloadlen] = NULL;
-
-  String message(p);
-  int i;
-
-  String resp= "ERROR";
-  //runner alrready register in this checkpoint
-  for(i = 0; i < numContestants; i++)
-  {
-    if (strcmp(String(p).c_str(), knownAddresses[i].c_str()) == 0) avaliable = false;
-  }
-    
+  // handle message arrived
+  StaticJsonDocument<256> doc;
+  deserializeJson(doc, payload, length);
   
-  if(avaliable)//search empty space to include
-    for(i = 0; i < numContestants; i++)
-    { 
-      if(knownAddresses[i] == 0)
-      {
-        
-        knownAddresses[i] = String(p);
-        foundAddresses[i] = 0;
-        resp = String(++i);
-        Serial.printf("Register runner:");
-        Serial.println(p);
-        break;
-      }
-    }
-  //coap.sendResponse(ip, port, packet.messageid, "0");
-  scrollText(resp);//12
-}
-
-void callback_setCheckpointPosition(CoapPacket &packet, IPAddress ip, int port)
-{ 
-  char p[packet.payloadlen + 1];
-  memcpy(p, packet.payload, packet.payloadlen);
-  p[packet.payloadlen] = NULL;
-
-  String message(p);
-  int newCheckPointValue = atol(&p[0]);
-  Serial.println(newCheckPointValue);
-  if(newCheckPointValue > 0)
+  if (strcmp(topic,"dronrace/setCheckpoint")==0)
   {
-    checkpointNumber = newCheckPointValue;
+    unsigned int value = doc["value"];
+    checkpointNumber = value;
     checkpointAssigned = true;
-    scrollText("READY");
   }
-  //coap.sendResponse(ip, port, packet.messageid, "0");
+ 
+  if (strcmp(topic,"dronrace/regRunner")==0)
+  {
+    String runnerMAC = doc["runner"];
+    bool avaliable = true;
+    int i;
+  
+    String resp= "ERROR";
+    //runner alrready register in this checkpoint
+    for(i = 0; i < numContestants; i++)
+    {
+      if (strcmp(runnerMAC.c_str(), knownAddresses[i].c_str()) == 0) avaliable = false;
+    }
+ 
+    if(avaliable)//search empty space to include
+      for(i = 0; i < numContestants; i++)
+      {
+        if(knownAddresses[i] == 0)
+        {
+          knownAddresses[i] = runnerMAC;
+          foundAddresses[i] = 0;
+          resp = String(++i);
+          Serial.printf("Register runner:");
+          Serial.println(runnerMAC);
+          break;
+        }
+      }
+    scrollText(resp);//12
+  } 
 }
-
-
-void callback_response(CoapPacket &packet, IPAddress ip, int port)
-{
-  Serial.println("[Coap Response got]");
-  char p[packet.payloadlen + 1];
-  memcpy(p, packet.payload, packet.payloadlen);
-  p[packet.payloadlen] = NULL;
-  Serial.println(p);
-}
-
-int putMessage(String message, String content)
-{
-  char url[message.length()];
-  char payload[content.length()];
-  message.toCharArray(url, message.length());
-  content.toCharArray(payload, content.length());
-  int msgid = coap.put(IPAddress(192, 168, 4, 1), 5683, url, payload);
-  return msgid;
-}
-
 
 /********************************************************************************************
  *                                    TIMMER FUNCTIONS
@@ -360,15 +337,19 @@ void IRAM_ATTR endTimer4() {
 /********************************************************************************************
  *                                    WIFI Overwatch
  *******************************************************************************************/
- void reconect()
+ void reconnect()
  {
-WiFi.persistent(false);
-  WiFi.mode(WIFI_AP_STA);
-  WiFi.enableSTA(true);
-  WiFi.begin(ssid, password);
-  while (WiFi.status() != WL_CONNECTED) {
-    scrollText("......");
-   }
-  deviceIP = WiFi.localIP();
+  Serial.println("Reconectando");
+   //WiFi.persistent(false);
+   WiFi.mode(WIFI_STA);
+  // WiFi.enableSTA(true);
+   WiFi.begin(ssid, password);
+   while (WiFi.status() != WL_CONNECTED) {
+     scrollText("......");
+    }
+   deviceIP = WiFi.localIP();
+  client.subscribe("dronrace/setCheckpoint");
+  client.subscribe("dronrace/regRunner");
+  client.publish("dronrace/reconnnections", deviceName);
  }
  
