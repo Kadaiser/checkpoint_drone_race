@@ -7,7 +7,7 @@ int foundAddresses[numContestants]    = {};
 unsigned int checkpointNumber;
 bool checkpointAssigned;
 IPAddress deviceIP;
-const char deviceName[] = "esp32_0A";
+const char deviceName[] = "esp32_0B";
 
 /********************************************************************************************
  *                                    TIMMERS
@@ -86,7 +86,6 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks
 {
   void onResult(BLEAdvertisedDevice advertisedDevice)
   {
-    //Serial.printf("Advertised Device: %s \n", advertisedDevice.toString().c_str());
     String address = advertisedDevice.getAddress().toString().c_str();
     int i = 0;
     for(i; i < numContestants; i++)
@@ -122,8 +121,16 @@ class MyAdvertisedDeviceCallbacks: public BLEAdvertisedDeviceCallbacks
         doc["runner"] = knownAddresses[i];
         char buffer[512];
         size_t n = serializeJson(doc, buffer);
-        client.publish("dronrace/detectedRunner", buffer, n);
-        scrollText(String(i));
+        /*
+        char topic[] = {0};
+        char chanel[] = "dronrace/";
+        char function[] = "/runnerDetected";
+        strcat(topic, chanel);
+        strcat(topic, deviceName);
+        strcat(topic, function);
+        */
+        client.publish("dronrace/runnerDetected", buffer, n);
+        scrollText(String(i+1));
       }
      }
     }
@@ -196,8 +203,14 @@ void setup()
     }
   }
   client.setCallback(callback);
-  client.subscribe("dronrace/setCheckpoint");
+  
+  //Subscribe to general topics
   client.subscribe("dronrace/regRunner");
+  client.subscribe("dronrace/getCheckpointValue");
+
+  //Subscribe to specific topics
+  client.subscribe("dronrace/esp32_0B/setCheckpoint");
+  
   checkpointAssigned = false;
   scrollText("SET");
 }
@@ -216,6 +229,7 @@ void loop()
 
     client.loop();
     if(!checkpointAssigned)scrollText(String(deviceIP[3]));
+    
   }
   else reconnect();
   
@@ -227,16 +241,30 @@ void loop()
 
 void callback(char* topic, byte* payload, unsigned int length)
 {
+
+  Serial.printf("Received callback:");
+  Serial.println(topic);
   // handle message arrived
   StaticJsonDocument<256> doc;
   deserializeJson(doc, payload, length);
-  
-  if (strcmp(topic,"dronrace/setCheckpoint")==0)
+
+  /** 
+   * respond with it asigned value, 0 if not set yet
+   */
+   
+  if (strcmp(topic,"dronrace/getCheckpointValue")==0)
   {
-    unsigned int value = doc["value"];
-    checkpointNumber = value;
-    checkpointAssigned = true;
+    StaticJsonDocument<256> doc;
+    doc["checkpoint"] = deviceName;
+    doc["value"] = 0;
+    
+    if(checkpointAssigned) doc["value"] = checkpointNumber;
+    char buffer[512];
+    size_t n = serializeJson(doc, buffer);
+    client.publish("dronrace/checkpointValue", buffer, n);
+    scrollText(String(checkpointNumber));
   }
+  
  
   if (strcmp(topic,"dronrace/regRunner")==0)
   {
@@ -265,7 +293,19 @@ void callback(char* topic, byte* payload, unsigned int length)
         }
       }
     scrollText(resp);//12
-  } 
+  }
+
+     /** 
+   * set the checkpoint value
+   */ 
+    if (strcmp(topic,"dronrace/esp32_0B/setCheckpoint")==0)
+    {
+      unsigned int value = doc["value"];
+      checkpointNumber = value;
+      checkpointAssigned = true;
+      scrollText("CHECK");//12
+    }
+  
 }
 
 /********************************************************************************************
@@ -352,4 +392,3 @@ void IRAM_ATTR endTimer4() {
   client.subscribe("dronrace/regRunner");
   client.publish("dronrace/reconnnections", deviceName);
  }
- 
